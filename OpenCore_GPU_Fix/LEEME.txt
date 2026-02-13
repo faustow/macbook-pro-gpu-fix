@@ -1,0 +1,318 @@
+============================================================
+  OPENCORE GPU FIX v3 — GUIA COMPLETA
+  MacBook Pro 15,1 (2018)
+  Actualizado: 13 Feb 2026
+============================================================
+
+INDICE:
+  1. Que hace este fix
+  2. Instalacion
+  3. Advertencias — que NO hacer
+  4. Recuperacion de emergencia
+  5. Como actualizar macOS sin romper nada
+  6. Verificacion
+
+============================================================
+1. QUE HACE ESTE FIX
+============================================================
+
+La GPU AMD Radeon Pro 560X de tu MacBook esta fallando y causa
+kernel panics (la Mac se reinicia sola). Este fix instala OpenCore,
+un bootloader que bloquea la AMD a nivel de driver y fuerza a macOS
+a usar solo la GPU Intel integrada (UHD 630).
+
+Dato clave: OpenCore restaura automaticamente la configuracion de
+GPU correcta CADA VEZ que arrancas a traves de el. Si algo se
+resetea (NVRAM, SMC, etc.), simplemente reinicia y deja que
+OpenCore arranque — el se encarga de restaurar todo.
+
+
+============================================================
+2. INSTALACION
+============================================================
+
+PASO 1: PREPARAR SEGURIDAD (SOLO LA PRIMERA VEZ)
+-------------------------------------------------
+1. Apagar la Mac
+2. Encender y mantener Cmd+R para entrar a Recovery Mode
+3. En el menu de arriba: Utilities > Startup Security Utility
+4. Poner Secure Boot en: NO SECURITY
+5. Poner External Boot en: ALLOW BOOTING FROM EXTERNAL MEDIA
+6. Cerrar Startup Security Utility
+
+   (Si ya hiciste esto antes, salta al Paso 2)
+
+
+PASO 2: INSTALAR OPENCORE
+--------------------------
+Desde Recovery Mode (si acabas de hacer el Paso 1, ya estas ahi):
+
+1. En el menu de arriba: Utilities > Terminal
+2. Copiar y pegar EXACTAMENTE este comando:
+
+bash "/Volumes/Macintosh HD - Data/Users/daftlog/Desktop/OpenCore_GPU_Fix/INSTALL.sh"
+
+3. Si dice "No such file or directory", prueba:
+
+diskutil mount "Macintosh HD - Data"
+bash "/Volumes/Macintosh HD - Data/Users/daftlog/Desktop/OpenCore_GPU_Fix/INSTALL.sh"
+
+4. Si tampoco funciona, prueba encontrar el volumen:
+
+ls /Volumes/
+(busca el que diga "Data" y usa esa ruta)
+
+
+PASO 3: REINICIAR
+------------------
+1. Cerrar Terminal
+2. Menu Apple > Restart
+3. Aparece el boot picker de OpenCore por 10 segundos
+4. Seleccionar "Macintosh HD" (o esperar — se selecciona solo)
+
+QUE VAS A VER (es normal):
+- Texto blanco en pantalla negra (verbose boot)
+- La pantalla puede parpadear o ponerse negra un momento
+- Espera hasta 2-3 minutos
+- Eventualmente aparece la pantalla de login
+- Si despues de 3 minutos no pasa nada, ve a la seccion 4
+
+
+INSTALACION MANUAL (si el script no funciona)
+----------------------------------------------
+Desde Terminal en Recovery Mode:
+
+diskutil mount disk0s1
+mkdir -p /Volumes/EFI/EFI
+cp -R "/Volumes/Macintosh HD - Data/Users/daftlog/Desktop/OpenCore_GPU_Fix/EFI/BOOT" /Volumes/EFI/EFI/
+cp -R "/Volumes/Macintosh HD - Data/Users/daftlog/Desktop/OpenCore_GPU_Fix/EFI/OC" /Volumes/EFI/EFI/
+
+Reiniciar.
+
+
+============================================================
+3. ADVERTENCIAS — QUE NO HACER
+============================================================
+
+NUNCA resetear NVRAM (Cmd+Option+P+R)
+  Borra boot-args, gpu-policy y gpu-power-prefs.
+  La GPU AMD se activa y la Mac crashea.
+  Si ya lo hiciste: ve a "RECUPERACION" seccion 4A.
+
+NUNCA resetear SMC a menos que sea absolutamente necesario
+  El reset SMC es: Apagar > mantener Shift+Control+Option+Power 10 seg.
+  Puede cambiar gpuswitch a automatico, lo que activa la AMD.
+  Si ya lo hiciste: ve a "RECUPERACION" seccion 4B.
+
+NUNCA poner gpuswitch=2 (automatico)
+  macOS activara la AMD bajo carga y crasheara.
+
+NUNCA instalar macOS 15 Sequoia
+  Tu MacBook Pro 15,1 (2018) NO es compatible con Sequoia.
+  El maximo soportado es macOS 14 Sonoma.
+
+NUNCA actualizar macOS sin respaldo de EFI
+  Ve a la seccion 5 para el procedimiento seguro.
+
+
+============================================================
+4. RECUPERACION DE EMERGENCIA
+============================================================
+
+Primero lee esto: OpenCore tiene auto-reparacion de NVRAM.
+Cada vez que arrancas a traves de OpenCore, el restaura
+automaticamente boot-args, gpuswitch y gpu-power-prefs con
+los valores correctos. Entonces en MUCHOS casos, la solucion
+es simplemente: reiniciar y arrancar por OpenCore.
+
+
+--- 4A: RESETEASTE NVRAM (Cmd+Option+P+R) ---
+
+La Mac probablemente esta en un ciclo de crashes porque la AMD
+se activo. Haz esto:
+
+1. Apagar la Mac (manten boton power 10 segundos)
+2. Encender y mantener la tecla Option/Alt inmediatamente
+3. Aparece el Startup Manager de Apple con los discos disponibles
+4. Si ves "EFI Boot": seleccionalo — esto carga OpenCore, que
+   restaurara automaticamente toda la NVRAM y arrancara bien
+5. Si NO ves "EFI Boot": selecciona "Macintosh HD" directamente
+   (puede crashear si la AMD se activa, pero intenta)
+
+Si nada de lo anterior funciona:
+1. Apagar > Encender con Cmd+R > Recovery Mode > Terminal
+2. Copiar y pegar estos comandos uno por uno:
+
+nvram 7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args="-v -wegnoegpu agdpmod=pikera -igfxblr"
+nvram 4D1EDE21-7FDE-4053-9556-E55836157E45:gpuswitch=%30
+nvram FA4CE28D-B62F-4C99-9CC3-6815686E30F9:gpu-power-prefs=%01%00%00%00
+nvram gpu-policy=%01
+
+3. Reiniciar. OpenCore deberia arrancar con los valores restaurados.
+
+
+--- 4B: RESETEASTE SMC ---
+
+El reset SMC puede cambiar gpuswitch a automatico (la Mac cambia
+a la AMD bajo carga y crashea). La solucion es la misma que 4A:
+
+1. Reiniciar y arrancar por OpenCore (el restaura gpuswitch=0)
+2. Si la Mac crashea antes de llegar a OpenCore: seguir los
+   pasos de 4A (Option/Alt > EFI Boot, o Recovery > nvram)
+
+
+--- 4C: PANTALLA NEGRA DESPUES DE INSTALAR/ACTUALIZAR ---
+
+Si la pantalla queda negra por mas de 3 minutos:
+
+1. Apagar (manten boton power 10 segundos)
+2. Encender y mantener Option/Alt
+3. Seleccionar "Macintosh HD" directamente (sin OpenCore)
+   NOTA: sin OpenCore la AMD puede activarse. Si crashea,
+   ve directamente al paso 4.
+4. Apagar > Encender con Cmd+R > Recovery Mode > Terminal
+5. Re-instalar OpenCore desde cero:
+
+diskutil mount disk0s1
+mkdir -p /Volumes/EFI/EFI
+cp -R "/Volumes/Macintosh HD - Data/Users/daftlog/Desktop/OpenCore_GPU_Fix/EFI/BOOT" /Volumes/EFI/EFI/
+cp -R "/Volumes/Macintosh HD - Data/Users/daftlog/Desktop/OpenCore_GPU_Fix/EFI/OC" /Volumes/EFI/EFI/
+
+6. Reiniciar y dejar que OpenCore arranque.
+
+
+--- 4D: KERNEL PANIC / MAC SE REINICIA SOLA ---
+
+1. Apagar > Encender con Option/Alt > "Macintosh HD" (sin OC)
+2. Revisar los logs de panico:
+
+ls -lt /Library/Logs/DiagnosticReports/ | head -5
+
+3. Abrir el archivo mas reciente y buscar pistas:
+   - Si menciona "AMD" o "Radeon": WhateverGreen no esta
+     bloqueando la GPU. Reinstalar OpenCore (seccion 4C paso 5).
+   - Si menciona "WindowServer": puede ser la resolucion.
+     Probar conectar un monitor externo por USB-C.
+   - Si es otro error: buscar el texto del error en Google.
+
+
+--- 4E: OPENCORE NO APARECE AL ARRANCAR ---
+
+Si la Mac arranca directo a macOS sin mostrar el picker de
+OpenCore:
+
+1. Verificar que T2 esta en No Security (seccion 2, Paso 1)
+2. Verificar que OpenCore esta instalado en la EFI:
+   - Recovery Mode > Terminal:
+   diskutil mount disk0s1
+   ls /Volumes/EFI/EFI/OC/
+   (debe mostrar OpenCore.efi, config.plist, Drivers/, Kexts/)
+3. Si no hay archivos: reinstalar (seccion 4C paso 5)
+4. Si hay archivos pero no aparece: puede que una actualizacion
+   de macOS haya sobreescrito BOOTx64.efi. Reinstalar.
+
+
+--- 4F: EMPEZAR DE CERO DESPUES DE REINSTALAR macOS ---
+
+Si reinstalaste macOS y necesitas el fix de nuevo:
+
+1. Necesitas el paquete OpenCore_GPU_Fix/ — esta en:
+   - ~/Desktop/OpenCore_GPU_Fix/ (si no borraste el escritorio)
+   - En este repositorio (si lo clonaste o lo copiaste a un USB)
+2. Copiar la carpeta OpenCore_GPU_Fix/ al Escritorio
+3. Seguir todos los pasos desde la seccion 2 (Instalacion)
+4. Despues de instalar, aplicar la configuracion NVRAM extra:
+
+sudo nvram 4D1EDE21-7FDE-4053-9556-E55836157E45:gpuswitch=%30
+sudo nvram gpu-policy=%01
+sudo nvram FA4CE28D-B62F-4C99-9CC3-6815686E30F9:gpu-power-prefs=%01%00%00%00
+sudo pmset -a hibernatemode 0
+sudo pmset -a standby 0
+sudo pmset -a powernap 0
+
+
+============================================================
+5. COMO ACTUALIZAR macOS SIN ROMPER NADA
+============================================================
+
+--- ACTUALIZACION MENOR (ej: 13.7.8 a 13.7.9) ---
+
+Generalmente seguro. Pasos:
+
+1. ANTES de actualizar, respalda la particion EFI:
+   - Recovery Mode (Cmd+R) > Terminal:
+
+   diskutil mount disk0s1
+   cp -R /Volumes/EFI/EFI "/Volumes/Macintosh HD - Data/Users/daftlog/Desktop/EFI_BACKUP"
+
+2. Verificar que Lilu y WhateverGreen soportan la nueva version:
+   - https://github.com/acidanthera/Lilu/releases
+   - https://github.com/acidanthera/WhateverGreen/releases
+   (tus versiones: Lilu 1.7.1, WhateverGreen 1.7.0 — soportan
+   hasta macOS 15+ asi que para Ventura 13.x no hay problema)
+
+3. Instalar la actualizacion normalmente desde Preferencias del
+   Sistema > Actualizacion de Software
+
+4. La Mac reinicia varias veces — cada reinicio pasa por OpenCore.
+   Esto es normal.
+
+5. Despues de actualizar, verificar (seccion 6 abajo)
+
+
+--- ACTUALIZACION MAYOR (ej: 13 Ventura a 14 Sonoma) ---
+
+Requiere mas precaucion. Pasos adicionales:
+
+1. Tu Mac soporta hasta macOS 14 Sonoma.
+   NO INSTALES macOS 15 Sequoia — no es compatible.
+
+2. Actualizar OpenCore, Lilu y WhateverGreen a las ultimas
+   versiones ANTES de actualizar macOS:
+   - Descargar de los repos de Acidanthera en GitHub
+   - Reemplazar en EFI/OC/ desde Recovery Mode
+   - Probar que arranque bien en tu macOS actual primero
+
+3. Crear un USB de arranque de emergencia con tu macOS actual:
+
+   sudo "/Applications/Install macOS Ventura.app/Contents/Resources/createinstallmedia" --volume /Volumes/MiUSB
+
+   Luego copiar OpenCore al USB (montar EFI del USB, copiar
+   EFI/BOOT y EFI/OC).
+
+4. Instalar la actualizacion major y monitorear los reinicios.
+   OpenCore debe aparecer en cada reinicio.
+
+5. Si algo sale mal: arrancar desde el USB de emergencia.
+
+
+============================================================
+6. VERIFICACION (despues de instalar o actualizar)
+============================================================
+
+Abrir Terminal y ejecutar:
+
+system_profiler SPDisplaysDataType | grep "Chipset Model"
+  -> Debe mostrar SOLO "Intel UHD Graphics 630"
+  -> Si muestra "AMD Radeon": el fix no esta funcionando
+
+kextstat | grep -v com.apple
+  -> Debe mostrar Lilu y WhateverGreen
+  -> Si no aparecen: OpenCore no esta inyectando kexts
+
+uptime
+  -> Verificar que no hay reinicios inesperados
+
+nvram 7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args
+  -> Debe mostrar: -v -wegnoegpu agdpmod=pikera -igfxblr
+
+
+============================================================
+QUE CAMBIO EN v3 (respecto a v2):
+- HfsPlus.efi ahora incluido en EFI/OC/Drivers/ (antes faltaba)
+- config.plist corregido: Vault=Optional, SecureBootModel=Disabled,
+  ScanPolicy=0, VirtualSMC/AppleALC deshabilitados, SMBIOS intacto
+- gpu-power-prefs corregido (tenia error de doble codificacion)
+- gpuswitch anadido a NVRAM auto-reparable de OpenCore
+- Script INSTALL.sh mejorado con auto-reparacion y multi-montaje
+============================================================

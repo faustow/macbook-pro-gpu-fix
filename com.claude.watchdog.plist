@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.watchdog</string>
+
+    <key>Comment</key>
+    <string>Keeps Claude Code running to fix MacBook Pro GPU issues</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/daftlog/claude_watchdog.sh</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/daftlog/claude_watchdog_stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/daftlog/claude_watchdog_stderr.log</string>
+
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+</dict>
+</plist>
