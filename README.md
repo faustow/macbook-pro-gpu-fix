@@ -1,248 +1,210 @@
-# mbp18noamd
+# MacBook Pro 2018 (15,1) — Disable Failing AMD Radeon Pro 560X
 
-Disable a failing AMD Radeon Pro 560X on a MacBook Pro 15,1 (2018) using OpenCore + WhateverGreen. Forces macOS to run exclusively on the Intel UHD Graphics 630 integrated GPU.
+Fix for a known hardware defect on the 2018 MacBook Pro 15-inch where the AMD Radeon Pro 560X discrete GPU degrades over time, causing kernel panics, boot loops, and WindowServer crashes. Apple never issued a recall. Logic board replacement costs $600-800+.
 
-This fix was developed over multiple iterations after the discrete GPU started causing kernel panics and boot loops. It works on macOS 13 Ventura where the Signed System Volume makes it impossible to remove AMD kernel extensions directly.
+This repository documents every approach attempted, what worked, what failed, and why — so others don't waste time repeating dead ends.
+
+## TL;DR — What actually works
+
+**Keep AMD drivers loaded** (they manage GPU power — without them the GPU overheats) but **prevent macOS from using the AMD GPU** via NVRAM + LaunchDaemon:
+
+```bash
+# From running macOS (with sudo) or Recovery Mode:
+nvram 4D1EDE21-7FDE-4053-9556-E55836157E45:gpuswitch=%30
+nvram fa4ce28d-b62f-4c99-9cc3-6815686e30f9:gpu-power-prefs=%01%00%00%00
+nvram 7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args="agc=-1"
+nvram gpu-policy=%01
+sudo pmset -a gpuswitch 0
+```
+
+Then install the LaunchDaemon from `scripts/disable-amd-gpu-daemon.plist` to re-apply on every boot.
+
+Intel UHD 630 drives the display. AMD stays powered but idle, managed by its drivers. No OpenCore needed. No kext removal needed.
 
 ## The problem
 
-The 2018 MacBook Pro 15-inch ships with dual GPUs: an Intel UHD 630 (integrated) and an AMD Radeon Pro 560X (discrete). A known hardware defect causes the AMD GPU's solder joints or die to degrade over time. Symptoms:
+The 2018 MacBook Pro 15-inch ships with dual GPUs: Intel UHD 630 (integrated) and AMD Radeon Pro 560X (discrete). A known hardware defect causes the AMD GPU's solder joints or die to degrade over time. Symptoms:
 
 - Random kernel panics during normal use
 - Boot loops (panic → reboot → AMD activates → panic again)
 - WindowServer crashes (black screen, forced reboot)
 
-Apple never issued a recall. The logic board replacement costs $600-800+.
+## Approaches tested
 
-## The solution
+### ❌ OpenCore + WhateverGreen (FAILED — do not use on this Mac)
 
-Instead of replacing hardware, this repo contains a software fix that prevents macOS from ever talking to the failing AMD GPU:
+**Problem 1: WiFi "Timeout!" during OpenCore boot.** OpenCore's boot process corrupts the T2 chip's internal USB bus. The BCM4364 WiFi chip (connected via T2 USB) fails to download firmware. Every configuration was tested:
 
-1. **OpenCore 1.0.6** — UEFI bootloader that injects kernel extensions and boot arguments before macOS loads
-2. **Lilu 1.7.1** — Kernel extension patcher framework
-3. **WhateverGreen 1.7.0** — GPU patcher that blocks the AMD driver from attaching to hardware
-4. **Four mandatory boot arguments:**
+| Config | Result |
+|--------|--------|
+| All Booter quirk combinations (SampleCustom, OCLP, Dortania, none) | Timeout |
+| All kext combinations (with/without Lilu, WEG, both disabled) | Timeout |
+| NVRAM manipulation (empty Delete/Add, RequestBootVarRouting off) | Timeout |
+| WiFi kext blocking (AppleBCMWLANBusInterfacePCIeMac etc.) | Still hung |
+| ExitBootServicesDelay=3s | Inconsistent — works ~30% of the time |
+| ExitBootServicesDelay=5s | Always fails (too much delay) |
+| ForceExitBootServices=true | Inconsistent |
+| OpenCore 1.0.7 update | No improvement |
+| ShowPicker=false instant boot | Timeout |
+| No verbose mode (-v removed) | Sometimes reaches login |
 
-| Flag | What it does |
-|------|-------------|
-| `-wegnoegpu` | Tells WhateverGreen to disable the discrete GPU at the driver level |
-| `agdpmod=pikera` | Bypasses Apple's display policy that blocks the iGPU from driving the internal panel when the dGPU is "missing" |
-| `-igfxblr` | Fixes a Coffee Lake backlight register bug that leaves the LCD at zero brightness |
-| `-v` | Verbose boot for debugging (optional but recommended) |
+**Conclusion: OpenCore itself is incompatible with this Mac's T2/WiFi. The boot process changes something fundamental about the UEFI environment that prevents the T2 USB bus from initializing.**
 
-## Requirements
+**Problem 2: Login hangs after password entry** (on the rare occasions boot succeeded). WindowServer gets stuck in IOGraphicsFamily during the loginwindow-to-desktop transition:
 
-- MacBook Pro 15,1 (Mid 2018, 15-inch)
-- macOS 13 Ventura (tested on 13.7.8, should work on 11+)
-- T2 Secure Boot set to **No Security**
-- Access to Recovery Mode (Cmd+R at boot)
+| Approach | Result |
+|----------|--------|
+| `-wegnoegpu` boot-arg | WindowServer crash — SafeEjectGPUAgent/AppleGPUWrangler conflict |
+| `disable-external-gpu` DeviceProperty on IGPU | Still hangs (shutdown_stall) |
+| SSDT-dGPU-Off v1 (`_OFF` method) + WEG | Still hangs |
+| SSDT-dGPU-Off v2 (Bumblebee `_DSM`+`_PS3`) + WEG | Still hangs |
+| SSDT + WEG + 7 AMD kext blocks + class-code spoof | Still hangs |
+| SSDT without WEG | Garbled display/panic (agdpmod/igfxblr are WEG-only flags) |
+| Auto-login to bypass loginwindow | Boot hung at WiFi before reaching login |
+
+**Conclusion: Even when OpenCore boots successfully, WhateverGreen's GPU disabling mechanism triggers a WindowServer deadlock during login.**
+
+### ❌ Remove AMD kexts from sealed system volume (FAILED — makes things WORSE)
+
+**Critical discovery: removing AMD kexts causes the GPU to OVERHEAT.** Without drivers, the AMD GPU hardware runs at full power with no power management. CPU temperature hit 99°C and fans maxed out at 5500+ RPM. The machine became unstable and crashed.
+
+Additional problems:
+- `kmutil` requires a KDK (Kernel Development Kit) to rebuild kernel collections on macOS 13+
+- Apple never published a KDK for build 22H730 — `kmutil` cannot work
+- `--allow-missing-kdk` fails with dependency resolution errors
+- Skipping `kmutil` and using only `bless --create-snapshot` destroyed the sealed system snapshot
+- The raw volume boots in an inconsistent state
+
+**Conclusion: AMD drivers are REQUIRED for GPU power management. Never remove them.**
+
+### ✅ NVRAM + LaunchDaemon (WORKS — current solution)
+
+Keep AMD drivers loaded so they manage the GPU's power state, but configure macOS to never use the AMD GPU for display or compute:
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `gpuswitch` | `0` | Force integrated GPU (Intel) via gmux chip |
+| `gpu-power-prefs` | `01000000` | Tell macOS to prefer integrated GPU |
+| `boot-args` | `agc=-1` | Disable Apple Graphics Controller switching |
+| `gpu-policy` | `01` | Prefer integrated GPU |
+| `pmset gpuswitch` | `0` | Force integrated at OS level |
+
+A LaunchDaemon re-applies these settings on every boot to survive NVRAM resets.
 
 ## Installation
 
-### 1. Set T2 security (one time only)
-
-1. Shut down the Mac
-2. Power on, hold **Cmd+R** until Recovery Mode loads
-3. Menu bar: **Utilities > Startup Security Utility**
-4. Set Secure Boot to: **No Security**
-5. Set External Boot to: **Allow Booting from External Media**
-
-### 2. Copy the package to the Mac
-
-Place the `OpenCore_GPU_Fix/` directory on the Desktop:
-```
-~/Desktop/OpenCore_GPU_Fix/
-```
-
-### 3. Install from Recovery Mode
+### 1. Set NVRAM (from Recovery Mode)
 
 1. Restart, hold **Cmd+R** for Recovery Mode
-2. Open Terminal (**Utilities > Terminal**)
-3. Run:
-```bash
-bash "/Volumes/Macintosh HD - Data/Users/YOUR_USERNAME/Desktop/OpenCore_GPU_Fix/INSTALL.sh"
-```
-4. If "no such file":
-```bash
-diskutil mount "Macintosh HD - Data"
-```
-Then retry step 3.
+2. **Utilities > Terminal**
+3. Run each command:
 
-5. If the script fails entirely, install manually:
 ```bash
-diskutil mount disk0s1
-mkdir -p /Volumes/EFI/EFI
-cp -R "/Volumes/Macintosh HD - Data/Users/YOUR_USERNAME/Desktop/OpenCore_GPU_Fix/EFI/BOOT" /Volumes/EFI/EFI/
-cp -R "/Volumes/Macintosh HD - Data/Users/YOUR_USERNAME/Desktop/OpenCore_GPU_Fix/EFI/OC" /Volumes/EFI/EFI/
+nvram 4D1EDE21-7FDE-4053-9556-E55836157E45:gpuswitch=%30
+nvram fa4ce28d-b62f-4c99-9cc3-6815686e30f9:gpu-power-prefs=%01%00%00%00
+nvram 7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args="agc=-1"
+nvram gpu-policy=%01
 ```
 
-### 4. Reboot
+4. `reboot`
 
-1. Restart the Mac
-2. The OpenCore picker appears (10-second timeout)
-3. Select **Macintosh HD**
-4. White text on black screen = normal (verbose boot)
-5. Wait 2-3 minutes for the login screen
-
-### 5. Verify
+### 2. Install LaunchDaemon (from running macOS)
 
 ```bash
-# Should show ONLY Intel UHD Graphics 630
+sudo cp scripts/disable-amd-gpu-daemon.plist /Library/LaunchDaemons/com.local.disable-amd-gpu.plist
+sudo chmod 644 /Library/LaunchDaemons/com.local.disable-amd-gpu.plist
+sudo chown root:wheel /Library/LaunchDaemons/com.local.disable-amd-gpu.plist
+sudo launchctl load /Library/LaunchDaemons/com.local.disable-amd-gpu.plist
+```
+
+### 3. Verify
+
+```bash
+# GPU status — both visible, Intel drives display
 system_profiler SPDisplaysDataType | grep "Chipset Model"
 
-# Should show Lilu and WhateverGreen loaded
-kextstat | grep -v com.apple
+# Should show gpuswitch 0
+pmset -g | grep gpuswitch
 
-# Confirm stable uptime
-uptime
+# AMD kexts loaded (CORRECT — they manage power)
+kextstat | grep -i amd
 ```
-
-## Recommended NVRAM settings
-
-Apply these from a running macOS session for additional stability:
-
-```bash
-# Force integrated GPU at firmware level
-sudo nvram 4D1EDE21-7FDE-4053-9556-E55836157E45:gpuswitch=%30
-
-# GPU selection preferences
-sudo nvram gpu-policy=%01
-sudo nvram FA4CE28D-B62F-4C99-9CC3-6815686E30F9:gpu-power-prefs=%01%00%00%00
-
-# Prevent GPU wake from sleep states
-sudo pmset -a hibernatemode 0
-sudo pmset -a standby 0
-sudo pmset -a powernap 0
-```
-
-## Emergency recovery
-
-**Black screen after install (>3 min):**
-1. Hold power button 10 seconds to force off
-2. Power on while holding **Option/Alt**
-3. Select "Macintosh HD" directly (bypasses OpenCore)
-
-**Remove OpenCore entirely:**
-1. Restart into Recovery Mode (Cmd+R)
-2. Terminal:
-```bash
-diskutil mount disk0s1
-rm -rf /Volumes/EFI/EFI/OC /Volumes/EFI/EFI/BOOT
-```
-3. Restart normally
 
 ## What NOT to do
 
 | Action | Why it's dangerous |
 |--------|-------------------|
-| Reset NVRAM (Cmd+Option+P+R) | Wipes boot-args, gpu-policy, gpu-power-prefs. AMD GPU activates on next boot. Crash. |
-| Reset SMC | Can reset gpuswitch to automatic. AMD activates under load. Crash. |
-| Delete AMD kexts from /System | Impossible on macOS 11+. Signed System Volume rejects all writes. |
-| Set gpuswitch=2 (automatic) | macOS will switch to AMD under load. Crash. |
-| Update macOS without checking | May break OpenCore/WhateverGreen compatibility. |
+| Remove AMD kexts from /System | GPU overheats without power management drivers. CPU hits 99°C. |
+| Use OpenCore on MBP 15,1 with T2 | WiFi Timeout during boot. Login hangs when it does boot. |
+| Reset NVRAM (Cmd+Option+P+R) | Wipes gpuswitch and gpu-power-prefs. AMD activates. Panic. |
+| Reset SMC | Can reset gpuswitch to automatic. AMD activates under load. Panic. |
+| Set gpuswitch=2 (automatic) | macOS switches to AMD under load. Panic. |
+| Use `bless --create-snapshot` without `kmutil` | Destroys sealed system snapshot. Inconsistent boot state. |
+| Disable SIP + modify system volume without KDK | `kmutil` fails. Broken kernel cache. Unbootable system. |
 
-**Additional notes:**
-- Lilu.kext **must load before** WhateverGreen.kext in the config (it's a dependency). The included config.plist already has the correct order.
-- `DisableLinkeditJettison` must be `true` in Kernel > Quirks for Lilu to work on macOS 12+.
-- `BlacklistAppleUpdate` is set to `true` to prevent accidental firmware updates from breaking the boot chain.
+## Emergency recovery
+
+**If the system won't boot normally:**
+
+1. Power off (hold 10 seconds)
+2. Power on holding **Cmd+R** → Recovery Mode
+3. **Utilities > Terminal**
+4. Restore the sealed snapshot: `bless --mount /Volumes/"Macintosh HD" --last-sealed-snapshot`
+5. If that fails: **Reinstall macOS** from Recovery (preserves your data)
+
+**If the system overheats after kext removal:**
+
+Recovery Mode Terminal:
+```bash
+# Mount system volume
+mount_apfs -o nobrowse /dev/diskXsY /Volumes/mnt1
+
+# Restore AMD kexts from backup
+mv /Volumes/mnt1/AMD_Kext_Backup/*.kext /Volumes/mnt1/System/Library/Extensions/
+
+# Restore sealed snapshot
+bless --mount /Volumes/mnt1 --last-sealed-snapshot
+
+# Reboot
+reboot
+```
+
+## Technical details
+
+| Component | Detail |
+|-----------|--------|
+| Model | MacBook Pro 15,1 (July 2018, 15-inch) |
+| CPU | Intel Core i7-8750H (Coffee Lake, 8th gen) |
+| iGPU | Intel UHD Graphics 630 |
+| dGPU | AMD Radeon Pro 560X (4GB) — **defective** |
+| WiFi | Broadcom BCM4364 (on T2 internal USB bus) |
+| Security | Apple T2 chip |
+| macOS | 13.7.8 Ventura (build 22H730) |
+| ACPI path (AMD) | `_SB.PCI0.PEG0.GFX0` |
+| PCI path (AMD) | `PciRoot(0x0)/Pci(0x1,0x0)/Pci(0x0,0x0)` |
+
+## Applicability
+
+This investigation applies to any MacBook Pro 15,1 (2018) with a failing AMD GPU. The NVRAM approach should work on macOS 11 Big Sur through macOS 14 Sonoma. It may also apply to:
+
+- MacBook Pro 11,5 (Mid 2015) — AMD Radeon R9 M370X
+- MacBook Pro 16,1 (2019) — AMD Radeon Pro 5300M/5500M
+
+The core principle is the same: keep AMD drivers loaded for power management, use NVRAM to force Intel as the primary GPU.
 
 ## Repo structure
 
 ```
-mbp18noamd/
-  README.md                    ← This file
-  CLAUDE.md                    ← Instructions for Claude Code to reproduce this fix
-  INVESTIGATION_EN.md          ← Full technical investigation (English)
-  INVESTIGACION_ES.md          ← Full technical investigation (Spanish)
-  claude_watchdog.sh           ← Auto-starts Claude Code on boot for autonomous repair
-  com.claude.watchdog.plist    ← launchd agent for the watchdog
-  OpenCore_GPU_Fix/
-    INSTALL.sh                 ← Automated installer (run from Recovery Mode)
-    LEEME.txt                  ← User instructions (Spanish)
-    EFI/
-      BOOT/
-        BOOTx64.efi            ← OpenCore 1.0.6 bootstrap
-      OC/
-        OpenCore.efi           ← OpenCore main binary
-        config.plist           ← Tested, working configuration
-        Drivers/
-          OpenRuntime.efi      ← UEFI runtime services
-          HfsPlus.efi          ← HFS+ filesystem driver
-        Kexts/
-          Lilu.kext/           ← Kernel patcher 1.7.1
-          WhateverGreen.kext/  ← GPU patcher 1.7.0
+macbook-pro-gpu-fix/
+  README.md                          ← This file
+  INVESTIGATION_EN.md                ← Full technical investigation (English)
+  INVESTIGACION_ES.md                ← Full technical investigation (Spanish)
+  scripts/
+    disable-amd-gpu-daemon.plist     ← LaunchDaemon to enforce GPU settings on boot
+    restore.sh                       ← Emergency restore script (run from Recovery)
+  OpenCore_GPU_Fix/                  ← OpenCore package (DOES NOT WORK — kept for reference)
 ```
-
-## How it was built
-
-This fix took 3 iterations to get right. The full investigation documents every failed attempt and why:
-
-- **v1:** Black screen — missing `agdpmod=pikera` and `-igfxblr` boot args
-- **v2:** Install script aborted — HfsPlus.efi not copied to Drivers/. Config had 7 critical bugs inherited from OpenCore's hackintosh template (Vault=Secure, SecureBootModel=Default, VirtualSMC enabled, SMBIOS spoofed, wrong boot-args, etc.)
-- **v3:** Works. All bugs fixed. This is what's in this repo.
-
-A Claude Code watchdog (`claude_watchdog.sh` + `com.claude.watchdog.plist`) was created to keep the AI agent running between crashes so it could continue diagnosing and iterating on the fix autonomously.
-
-See `INVESTIGATION_EN.md` for the complete technical breakdown.
-
-## Updating macOS
-
-The config.plist includes self-healing NVRAM: on every boot through OpenCore, the `NVRAM > Delete` section clears stale values and `NVRAM > Add` restores the correct `boot-args`, `gpu-power-prefs`, and `gpuswitch`. This means even if an update resets these variables, the next boot through OpenCore fixes them automatically.
-
-### Minor updates (13.7.x to 13.7.y) — generally safe
-
-1. **Back up the EFI partition first.** From Recovery Mode:
-   ```bash
-   diskutil mount disk0s1
-   cp -R /Volumes/EFI/EFI ~/Desktop/EFI_BACKUP
-   ```
-2. Check that your Lilu/WhateverGreen versions support the target macOS version at [Lilu releases](https://github.com/acidanthera/Lilu/releases) and [WhateverGreen releases](https://github.com/acidanthera/WhateverGreen/releases)
-3. Install the update normally from System Preferences
-4. The Mac will reboot several times — each reboot passes through OpenCore
-5. After updating, verify: `system_profiler SPDisplaysDataType | grep Chipset` should show only Intel UHD 630
-
-### Major upgrades (13 to 14 Sonoma) — proceed with caution
-
-The MacBook Pro 15,1 is officially supported up to **macOS 14 Sonoma**. It is **NOT supported by macOS 15 Sequoia**.
-
-1. Everything from the minor update steps above, **plus:**
-2. **Update OpenCore, Lilu, and WhateverGreen to the latest versions FIRST** — test on your current macOS before upgrading
-3. **Create a bootable USB installer** of your current working macOS as a fallback:
-   ```bash
-   sudo /Applications/Install\ macOS\ Ventura.app/Contents/Resources/createinstallmedia --volume /Volumes/MyUSB
-   ```
-   Then copy the OpenCore EFI to the USB's EFI partition
-4. Download the new macOS and install. Monitor the reboots — OpenCore picker should appear each time
-
-### If the update breaks things
-
-- **Mac won't boot:** Power off (hold 10 sec), power on with **Option/Alt** held, select "EFI Boot" or use your USB installer
-- **OpenCore was overwritten:** Restore EFI from backup or reinstall from the `OpenCore_GPU_Fix/` package via Recovery Mode
-- **Kexts incompatible:** Boot with Option/Alt to bypass OpenCore, download updated kexts, replace in EFI/OC/Kexts/ from Recovery
-- **NVRAM lost:** OpenCore restores it automatically on next boot through OpenCore. If you can't boot through OpenCore, from Recovery: `nvram 7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args="-v -wegnoegpu agdpmod=pikera -igfxblr"`
-
-### NVRAM self-healing (how it works)
-
-Each boot through OpenCore:
-1. **Deletes** `boot-args`, `gpuswitch`, `gpu-power-prefs` from NVRAM (clears stale values)
-2. **Adds** them back with the correct values from config.plist
-3. This guarantees the GPU fix survives NVRAM resets, macOS updates, and accidental changes
-
-| Variable | GUID | Value set by OpenCore |
-|----------|------|-----------------------|
-| `boot-args` | 7C436110 | `-v -wegnoegpu agdpmod=pikera -igfxblr` |
-| `gpuswitch` | 4D1EDE21 | `0` (force integrated) |
-| `gpu-power-prefs` | FA4CE28D | `01 00 00 00` |
-
-## Applicability
-
-This fix should work on any MacBook Pro 15,1 (2018, 15-inch) with a failing AMD Radeon Pro 560X or 555X. It may also apply to:
-
-- MacBook Pro 11,5 (Mid 2015, 15-inch) — AMD Radeon R9 M370X
-- MacBook Pro 16,1 (2019, 16-inch) — AMD Radeon Pro 5300M/5500M
-
-The `config.plist` would need adjustments for different models (different iGPU, different backlight behavior). The core approach (OpenCore + Lilu + WhateverGreen + `-wegnoegpu`) is the same.
 
 ## License
 
-The OpenCore bootloader, Lilu, and WhateverGreen are open-source projects by [Acidanthera](https://github.com/acidanthera). HfsPlus.efi is proprietary Apple code. The scripts and documentation in this repo are provided as-is for educational and repair purposes.
+Documentation and scripts in this repo are provided as-is for educational and repair purposes.
