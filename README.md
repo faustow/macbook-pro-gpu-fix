@@ -1,5 +1,7 @@
 # MacBook Pro 2018 (15,1) — Disable Failing AMD Radeon Pro 560X
 
+**Status: WORKING** — Tested and confirmed April 5, 2026. Machine stable, fans normal, Intel UHD 630 driving display, AMD Radeon Pro 560X idle with power management active.
+
 Fix for a known hardware defect on the 2018 MacBook Pro 15-inch where the AMD Radeon Pro 560X discrete GPU degrades over time, causing kernel panics, boot loops, and WindowServer crashes. Apple never issued a recall. Logic board replacement costs $600-800+.
 
 This repository documents every approach attempted, what worked, what failed, and why — so others don't waste time repeating dead ends.
@@ -129,6 +131,28 @@ pmset -g | grep gpuswitch
 # AMD kexts loaded (CORRECT — they manage power)
 kextstat | grep -i amd
 ```
+
+## Verified results (April 5, 2026)
+
+After applying the NVRAM + LaunchDaemon approach:
+
+```
+$ pmset -g | grep gpuswitch
+ gpuswitch            0
+
+$ kextstat | grep -i amd | wc -l
+       7
+
+$ system_profiler SPDisplaysDataType | grep "Chipset Model"
+      Chipset Model: Intel UHD Graphics 630
+      Chipset Model: Radeon Pro 560X
+```
+
+- **7 AMD kexts loaded** — managing GPU power state (prevents overheating)
+- **Intel UHD 630** driving the internal display at 2880x1800
+- **Radeon Pro 560X** visible but never used for display or compute
+- **Fans normal** — not spinning at max RPM
+- **No kernel panics** — machine stable
 
 ## What NOT to do
 
