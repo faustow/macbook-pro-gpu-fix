@@ -11,15 +11,19 @@ This repository documents every approach attempted, what worked, what failed, an
 **Keep AMD drivers loaded** (they manage GPU power — without them the GPU overheats) but **prevent macOS from using the AMD GPU** via NVRAM + LaunchDaemon:
 
 ```bash
-# From running macOS (with sudo) or Recovery Mode:
+# From Recovery Mode (Cmd+R > Utilities > Terminal):
+nvram 7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args="agc=-1"
 nvram 4D1EDE21-7FDE-4053-9556-E55836157E45:gpuswitch=%30
 nvram fa4ce28d-b62f-4c99-9cc3-6815686e30f9:gpu-power-prefs=%01%00%00%00
-nvram 7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args="agc=-1"
 nvram gpu-policy=%01
-sudo pmset -a gpuswitch 0
+csrutil disable
 ```
 
-Then install the LaunchDaemon from `scripts/disable-amd-gpu-daemon.plist` to re-apply on every boot.
+Then from running macOS, install the LaunchDaemon from `scripts/disable-amd-gpu-daemon.plist` to re-apply on every boot.
+
+**Important:** `agc=-1` is the most critical setting. `gpuswitch=0` alone only controls which GPU drives the **display** — macOS can still send rendering/compute work to the AMD GPU, causing GPU Reset panics. `agc=-1` disables the Apple Graphics Controller switching entirely, preventing macOS from using the AMD for anything.
+
+SIP must be disabled for the LaunchDaemon to re-apply NVRAM settings on boot.
 
 Intel UHD 630 drives the display. AMD stays powered but idle, managed by its drivers. No OpenCore needed. No kext removal needed.
 
@@ -95,20 +99,23 @@ A LaunchDaemon re-applies these settings on every boot to survive NVRAM resets.
 
 ## Installation
 
-### 1. Set NVRAM (from Recovery Mode)
+### 1. Set NVRAM + disable SIP (from Recovery Mode)
 
 1. Restart, hold **Cmd+R** for Recovery Mode
 2. **Utilities > Terminal**
 3. Run each command:
 
 ```bash
+nvram 7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args="agc=-1"
 nvram 4D1EDE21-7FDE-4053-9556-E55836157E45:gpuswitch=%30
 nvram fa4ce28d-b62f-4c99-9cc3-6815686e30f9:gpu-power-prefs=%01%00%00%00
-nvram 7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args="agc=-1"
 nvram gpu-policy=%01
+csrutil disable
 ```
 
 4. `reboot`
+
+**Why disable SIP?** The LaunchDaemon needs to write NVRAM on every boot to re-apply `agc=-1` (protects against NVRAM resets). This requires SIP to be off.
 
 ### 2. Install LaunchDaemon (from running macOS)
 
@@ -132,11 +139,24 @@ pmset -g | grep gpuswitch
 kextstat | grep -i amd
 ```
 
-## Verified results (April 5, 2026)
+## Verified results
 
-After applying the NVRAM + LaunchDaemon approach:
+### April 5, 2026 — Initial fix (gpuswitch=0 + gpu-power-prefs)
+
+Machine stable for 2 days with Intel driving display and AMD idle.
+
+### April 7, 2026 — GPU Reset panics returned
+
+After 2 days, the AMD GPU started crashing again with `GPU Reset` panics. Root cause: **`gpuswitch=0` only controls display routing**. macOS was still sending rendering/compute work to the AMD via WindowServer, triggering GPU Reset events every ~30 seconds at boot.
+
+**Fix**: Added `agc=-1` to boot-args (disables Apple Graphics Controller switching entirely). This prevents macOS from using the AMD GPU for ANY purpose — display, rendering, or compute.
+
+### Current stable config
 
 ```
+$ nvram boot-args
+boot-args    agc=-1
+
 $ pmset -g | grep gpuswitch
  gpuswitch            0
 
@@ -150,9 +170,8 @@ $ system_profiler SPDisplaysDataType | grep "Chipset Model"
 
 - **7 AMD kexts loaded** — managing GPU power state (prevents overheating)
 - **Intel UHD 630** driving the internal display at 2880x1800
-- **Radeon Pro 560X** visible but never used for display or compute
+- **Radeon Pro 560X** visible but idle — `agc=-1` prevents any GPU work being sent to it
 - **Fans normal** — not spinning at max RPM
-- **No kernel panics** — machine stable
 
 ## What NOT to do
 

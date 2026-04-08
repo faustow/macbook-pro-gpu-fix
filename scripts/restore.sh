@@ -12,7 +12,7 @@ echo ""
 
 # --- Paso 1: Encontrar volumen del sistema ---
 echo "[1/5] Buscando volumen del sistema..."
-SYS_DEV=""
+SYS_DEV="/dev/disk3s4"
 for d in $(diskutil apfs list 2>/dev/null | grep "APFS Volume Disk" | awk '{print $NF}'); do
     ROLE=$(diskutil info "$d" 2>/dev/null | grep "Volume Role" | sed 's/.*: *//')
     NAME=$(diskutil info "$d" 2>/dev/null | grep "Volume Name" | sed 's/.*: *//')
@@ -33,10 +33,11 @@ echo ""
 echo "[2/5] Montando volumen y restaurando AMD kexts..."
 
 MNT="/Volumes/mnt1"
-mkdir -p "$MNT" 2>/dev/null
-
-MOUNTED=0
-mount_apfs -o nobrowse "$SYS_DEV" "$MNT" 2>/dev/null && MOUNTED=1
+mkdir -p "$MNT"
+umount "/Volumes/Macintosh HD" 2>/dev/null || true
+#/sbin/mount_apfs -o nobrowse "$SYS_DEV" "$MNT"
+MOUNTED=1
+/sbin/mount_apfs -o nobrowse "$SYS_DEV" "$MNT" 2>/dev/null && MOUNTED=1
 if [ "$MOUNTED" = "0" ]; then
     mount -o nobrowse -t apfs "$SYS_DEV" "$MNT" 2>/dev/null && MOUNTED=1
 fi

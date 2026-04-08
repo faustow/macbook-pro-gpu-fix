@@ -8,7 +8,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>pmset -a gpuswitch 0; nvram 4D1EDE21-7FDE-4053-9556-E55836157E45:gpuswitch=%30; nvram fa4ce28d-b62f-4c99-9cc3-6815686e30f9:gpu-power-prefs=%01%00%00%00</string>
+        <string>pmset -a gpuswitch 0; nvram 4D1EDE21-7FDE-4053-9556-E55836157E45:gpuswitch=%30; nvram fa4ce28d-b62f-4c99-9cc3-6815686e30f9:gpu-power-prefs=%01%00%00%00; nvram 7C436110-AB2A-4BBB-A880-FE41995C9F82:boot-args="agc=-1"</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
